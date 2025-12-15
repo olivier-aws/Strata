@@ -114,7 +114,7 @@ partial def constrainedTypeToString (ct : LaurelConstrainedType) : String :=
 partial def typeDefinitionToString (td : LaurelTypeDefinition) : String :=
   match td with
   | .Composite ct => s!"Composite({compositeTypeToString ct})"
-  | .Constrainted _ => s!"Constrained(...)"  -- Constrainted has a problematic definition
+  | .Constrained ct => s!"Constrained({constrainedTypeToString ct})"
 
 partial def programToString (p : LaurelProgram) : String :=
   s!"Program({listToString p.staticProcedures procedureToString}, " ++

@@ -442,11 +442,9 @@ partial def typeDefinitionFromIon (v : _root_.Ion.Ion _root_.Ion.SymbolId) : Str
   | "Laurel.Composite" =>
     let compositeType ← compositeTypeFromIon args[2]
     return .Composite compositeType
-  | "Laurel.Constrainted" =>
-    -- Note: TypeDefinition.Constrainted has a problematic definition in Laurel.lean
-    -- The implicit parameter {ConstrainedType} shadows the actual ConstrainedType structure
-    -- For now, we throw an error as this case is not commonly used in testing
-    throw s!"Constrainted type definitions are not yet supported in ION deserialization"
+  | "Laurel.Constrained" =>
+       let constrainedType ← constrainedTypeFromIon args[2]
+       return .Constrained constrainedType
   | s => throw s!"Unknown TypeDefinition type: {s}"
 
 partial def programFromIon (v : _root_.Ion.Ion _root_.Ion.SymbolId) : Strata.FromIonM LaurelProgram := do

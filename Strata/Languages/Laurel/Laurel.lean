@@ -231,7 +231,7 @@ Example 2:
  -/
 inductive TypeDefinition where
   | Composite (ty : CompositeType)
-  | Constrainted {ConstrainedType} (ty : ConstrainedType)
+  | Constrained (ty : ConstrainedType)
 
 structure Program where
   staticProcedures : List Procedure

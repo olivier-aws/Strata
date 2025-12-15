@@ -731,7 +731,7 @@ public class SExprEncoder {
     
     private IonValue encodeConstrainedTypeDef(TypeDefinition.Constrained typeDef) {
         return sexp(
-            laurelSymbol("Constrainted"),  // Note: matches Lean typo "Constrainted"
+            laurelSymbol("Constrained"),  // Fixed: now uses correct name
             nullValue(),
             encodeConstrainedType(typeDef.type())
         );
