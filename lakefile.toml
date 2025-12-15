@@ -31,3 +31,7 @@ name = "StrataToCBMC"
 
 [[lean_exe]]
 name = "BoogieToGoto"
+
+[[lean_exe]]
+name = "LaurelIonTest"
+root = "StrataTest.Languages.Laurel.LaurelIonTest"
