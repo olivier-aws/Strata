@@ -87,17 +87,10 @@ public class IonSerializer {
             throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         
-        // Create a local symbol table struct
-        IonStruct symbolTableStruct = createSymbolTableStruct(symbolTable.getSymbols());
-        
-        // Create a list containing the symbol table and the encoded program
-        IonList wrapper = ionSystem.newEmptyList();
-        wrapper.add(symbolTableStruct);
-        wrapper.add(encodedProgram.clone());
-        
-        // Write as binary ION
+        // Don't create a manual symbol table - let the Ion writer handle it automatically
+        // Just write the program directly
         try (IonWriter writer = IonBinaryWriterBuilder.standard().build(baos)) {
-            wrapper.writeTo(writer);
+            encodedProgram.writeTo(writer);
         }
         
         return baos.toByteArray();

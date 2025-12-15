@@ -35,7 +35,8 @@ class IonSerializerRoundTripTest {
     private final PrettyPrinter prettyPrinter = new PrettyPrinter();
     
     // Path to the Lean executable (built with lake build LaurelIonTest)
-    private static final String LEAN_EXE_PATH = ".lake/build/bin/LaurelIonTest";
+    // Path is relative to Tools/LaurelJava where Maven runs
+    private static final String LEAN_EXE_PATH = "../../.lake/build/bin/LaurelIonTest";
     
     /**
      * Feature: java-laurel-ion, Property 1: ION Serialization Round-Trip
@@ -55,24 +56,11 @@ class IonSerializerRoundTripTest {
         
         // Verify the ION is valid by parsing it
         try (IonReader reader = IonReaderBuilder.standard().build(ionBytes)) {
-            // Read the top-level list
+            // Read the top-level s-expression (program)
             IonType type = reader.next();
             assertNotNull(type, "Should have at least one ION value");
-            assertEquals(IonType.LIST, type, "Top-level should be a list");
+            assertEquals(IonType.SEXP, type, "Top-level should be a program s-expression");
             
-            reader.stepIn();
-            
-            // First element should be the symbol table struct
-            type = reader.next();
-            assertNotNull(type, "Should have symbol table");
-            assertEquals(IonType.STRUCT, type, "First element should be symbol table struct");
-            
-            // Second element should be the encoded program
-            type = reader.next();
-            assertNotNull(type, "Should have encoded program");
-            assertEquals(IonType.SEXP, type, "Second element should be s-expression");
-            
-            reader.stepOut();
         } catch (Exception e) {
             fail("Failed to parse ION output: " + e.getMessage() + 
                  "\nProgram: " + prettyPrinter.print(program));
@@ -94,23 +82,9 @@ class IonSerializerRoundTripTest {
         assertEquals(1, datagram.size(), "Should have exactly one top-level value");
         
         IonValue topLevel = datagram.get(0);
-        assertTrue(topLevel instanceof IonList, "Top-level should be a list");
+        assertTrue(topLevel instanceof IonSexp, "Top-level should be a program s-expression");
         
-        IonList list = (IonList) topLevel;
-        assertEquals(2, list.size(), "List should have symbol table and program");
-        
-        // Verify symbol table
-        IonValue symbolTableValue = list.get(0);
-        assertTrue(symbolTableValue instanceof IonStruct, "First element should be struct");
-        IonStruct symbolTable = (IonStruct) symbolTableValue;
-        assertTrue(symbolTable.hasTypeAnnotation("$ion_symbol_table"), 
-                   "Should have $ion_symbol_table annotation");
-        
-        // Verify program s-expression
-        IonValue programValue = list.get(1);
-        assertTrue(programValue instanceof IonSexp, "Second element should be s-expression");
-        
-        IonSexp programSexp = (IonSexp) programValue;
+        IonSexp programSexp = (IonSexp) topLevel;
         assertTrue(programSexp.size() > 0, "Program s-expression should not be empty");
         
         // First element should be the Laurel.Program symbol
@@ -196,8 +170,7 @@ class IonSerializerRoundTripTest {
         
         // Parse and verify
         IonDatagram datagram = ionSystem.getLoader().load(ionBytes);
-        IonList list = (IonList) datagram.get(0);
-        IonSexp programSexp = (IonSexp) list.get(1);
+        IonSexp programSexp = (IonSexp) datagram.get(0);
         
         // Should have: Laurel.Program, null (annotation), seq (procs), seq (fields), seq (types)
         assertTrue(programSexp.size() >= 5, "Program should have at least 5 elements");
