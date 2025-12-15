@@ -36,5 +36,3 @@ name = "BoogieToGoto"
 name = "LaurelIonTest"
 root = "StrataTest.Languages.Laurel.LaurelIonTest"
 
-[[lean_exe]]
-name = "DebugIonLean"
