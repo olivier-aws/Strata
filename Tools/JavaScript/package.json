@@ -1,0 +1,20 @@
+{
+  "name": "strata-javascript",
+  "version": "0.1.0",
+  "description": "Strata JavaScript/TypeScript front-end",
+  "type": "module",
+  "main": "src/cli.ts",
+  "scripts": {
+    "build": "tsc",
+    "dialect": "tsx src/cli.ts dialect dialects",
+    "js_to_strata": "tsx src/cli.ts js_to_strata"
+  },
+  "dependencies": {
+    "ion-js": "^5.2.0",
+    "typescript": "^5.7.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "@types/node": "^22.0.0"
+  }
+}
