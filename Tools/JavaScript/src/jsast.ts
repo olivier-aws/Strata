@@ -87,7 +87,7 @@ export function genDialect(): Dialect {
     "CallExpr",
     [
       new ArgDecl("callee", exprRef),
-      new ArgDecl("args", new QualifiedIdent("Init", "Seq")),
+      new ArgDecl("args", Init.Seq, exprRef),
     ],
     exprRef,
   );
@@ -147,7 +147,7 @@ export function genDialect(): Dialect {
   );
   d.addOp(
     "Block",
-    [new ArgDecl("statements", new QualifiedIdent("Init", "Seq"))],
+    [new ArgDecl("statements", Init.Seq, stmtRef)],
     stmtRef,
   );
   d.addOp(
@@ -166,7 +166,7 @@ export function genDialect(): Dialect {
     "FunctionDecl",
     [
       new ArgDecl("name", Init.Ident),
-      new ArgDecl("params", new QualifiedIdent("Init", "Seq")),
+      new ArgDecl("params", Init.Seq, paramRef),
       new ArgDecl("returnType", typeRef),
       new ArgDecl("body", stmtRef),
     ],
@@ -176,7 +176,7 @@ export function genDialect(): Dialect {
   // Module (top-level command)
   d.addOp(
     "Module",
-    [new ArgDecl("statements", new QualifiedIdent("Init", "Seq"))],
+    [new ArgDecl("statements", Init.Seq, stmtRef)],
     Init.Command,
   );
 

@@ -133,11 +133,19 @@ export class SynCatDecl {
 }
 
 export class ArgDecl {
-  constructor(public name: string, public kind: QualifiedIdent) {}
+  constructor(public name: string, public kind: QualifiedIdent, public kindArg?: QualifiedIdent) {}
   toIon(): IonValue {
+    let innerSexp: IonValue;
+    if (this.kindArg) {
+      // Parameterized category like Seq(stmt) or Option(expr)
+      // Format: (category (null Init.Seq (null JavaScript.stmt)))
+      innerSexp = ionSexp(ionNull(), this.kind.toIon(), ionSexp(ionNull(), this.kindArg.toIon()));
+    } else {
+      innerSexp = ionSexp(ionNull(), this.kind.toIon());
+    }
     return new dom.Struct([
       ["name", ionString(this.name)],
-      ["type", ionSexp(ionSymbol("category"), ionSexp(ionNull(), this.kind.toIon()))],
+      ["type", ionSexp(ionSymbol("category"), innerSexp)],
     ]);
   }
 }
@@ -231,6 +239,8 @@ export const Init = {
   Ident: new QualifiedIdent("Init", "Ident"),
   Num: new QualifiedIdent("Init", "Num"),
   Str: new QualifiedIdent("Init", "Str"),
+  Seq: new QualifiedIdent("Init", "Seq"),
+  Option: new QualifiedIdent("Init", "Option"),
 };
 
 // --- Serialization ---

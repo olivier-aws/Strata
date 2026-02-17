@@ -16,8 +16,8 @@ function writeDialect(outputDir: string) {
   const dialect = genDialect();
   fs.mkdirSync(outputDir, { recursive: true });
   const outputPath = path.join(outputDir, `${dialect.name}.dialect.st.ion`);
-  const ionText = serializeToIonText(dialect.toIon());
-  fs.writeFileSync(outputPath, ionText, "utf-8");
+  const bytes = serializeToIonBinary(dialect.toIon());
+  fs.writeFileSync(outputPath, bytes);
   console.log(`Wrote ${dialect.name} dialect to ${outputPath}`);
 }
 
@@ -57,14 +57,14 @@ function jsToStrata(inputPath: string, outputPath: string) {
 
   const strataProgram = parser.parseModule(sourceFile, checker);
 
-  if (outputPath.endsWith(".ion")) {
-    // Binary Ion
-    const bytes = serializeToIonBinary(strataProgram.toIon());
-    fs.writeFileSync(outputPath, bytes);
-  } else {
+  if (outputPath.endsWith(".txt")) {
     // Text Ion (for debugging)
     const text = serializeToIonText(strataProgram.toIon());
     fs.writeFileSync(outputPath, text, "utf-8");
+  } else {
+    // Binary Ion (default)
+    const bytes = serializeToIonBinary(strataProgram.toIon());
+    fs.writeFileSync(outputPath, bytes);
   }
   console.log(`Wrote Strata program to ${outputPath}`);
 }
