@@ -9,12 +9,14 @@ import Strata.DDM.Integration.Java.Gen
 import Strata.Languages.Core.SarifOutput
 import Strata.Languages.Laurel.Grammar.ConcreteToAbstractTreeTranslator
 import Strata.Languages.Laurel.LaurelToCoreTranslator
+import Strata.Languages.Laurel.LaurelFormat
 import Strata.Languages.Python.Python
 import Strata.Languages.Python.Specs
 import Strata.Languages.Python.Specs.ToLaurel
 import Strata.Languages.Laurel.LaurelFormat
 import Strata.Transform.ProcedureInlining
 import Strata.Languages.Python.CorePrelude
+import Strata.Languages.JavaScript.JavaScript
 
 def exitFailure {α} (message : String) (hint : String := "strata --help") : IO α := do
   IO.eprintln s!"Exception: {message}\n\nRun {hint} for additional help."
@@ -700,10 +702,117 @@ def commandGroups : List CommandGroup := [
                  pySpecsCommand, pySpecToLaurelCommand] },
   { name := "Laurel"
     commands := [laurelAnalyzeCommand] },
+  { name := "JavaScript"
+    commands := [jsToLaurelCommand, jsAnalyzeLaurelCommand] },
 ]
 
 def commandList : List Command :=
   commandGroups.foldl (init := []) fun acc g => acc ++ g.commands
+
+def jsToLaurelCommand : Command where
+  name := "jsToLaurel"
+  args := [ "input", "output" ]
+  help := "Translate a JavaScript/TypeScript Ion file to a Laurel Ion file."
+  callback := fun _ v => do
+    let filePath := v[0]
+    let outputPath : System.FilePath := v[1]
+    let stmts ← Strata.JavaScript.readJavaScriptStrata filePath
+      |>.toIO (fun e => IO.Error.userError e)
+    match Strata.JavaScript.jsToLaurel stmts (filePath := filePath) with
+    | .error msg =>
+      exitFailure s!"JavaScript to Laurel translation failed: {msg}"
+    | .ok laurelProgram =>
+      let bytes := Strata.Laurel.ToIon.programToIonBytes laurelProgram
+      IO.FS.writeBinFile outputPath bytes
+      IO.println s!"Wrote Laurel Ion to {outputPath}"
+
+/-- Try to read TypeScript source file and create a FileMap for line/column conversion -/
+def tryReadTsSource (ionPath : String) : IO (Option (String × Lean.FileMap)) := do
+  -- Try stripping .js.st.ion or .ts.st.ion to find the source
+  let candidates := [
+    ionPath.dropRight ".st.ion".length,  -- e.g. foo.ts
+    ionPath.dropRight ".ts.st.ion".length ++ ".ts",
+    ionPath.dropRight ".js.st.ion".length ++ ".js"
+  ]
+  for path in candidates do
+    try
+      let content ← IO.FS.readFile path
+      return some (path, Lean.FileMap.ofString content)
+    catch _ => pure ()
+  return none
+
+def jsAnalyzeLaurelCommand : Command where
+  name := "jsAnalyzeLaurel"
+  args := [ "file", "verbose" ]
+  help := "Analyze a JavaScript/TypeScript Ion file through Laurel. Write results to stdout."
+  callback := fun _ v => do
+    let verbose := v[1] == "1"
+    let filePath := v[0]
+    let stmts ← Strata.JavaScript.readJavaScriptStrata filePath
+      |>.toIO (fun e => IO.Error.userError e)
+    let tsSourceOpt ← tryReadTsSource filePath
+
+    let sourcePathForMetadata := match tsSourceOpt with
+      | some (tsPath, _) => tsPath
+      | none => filePath
+
+    if verbose then
+      IO.println s!"==== JavaScript AST: {stmts.size} statements ===="
+
+    match Strata.JavaScript.jsToLaurel stmts (filePath := sourcePathForMetadata) with
+    | .error msg =>
+      exitFailure s!"JavaScript to Laurel translation failed: {msg}"
+    | .ok laurelProgram =>
+      if verbose then
+        IO.println "\n==== Laurel Program ===="
+        IO.println f!"{laurelProgram}"
+
+      match Strata.Laurel.translate laurelProgram with
+      | .error diagnostics =>
+        exitFailure s!"Laurel to Core translation failed: {diagnostics.map (·.message)}"
+      | .ok (coreProgram, _) =>
+        if verbose then
+          IO.println "\n==== Core Program ===="
+          IO.print coreProgram
+
+        let verboseMode := VerboseMode.ofBool verbose
+        let vcResults ← IO.FS.withTempDir (fun tempDir =>
+            EIO.toIO
+              (fun f => IO.Error.userError (toString f))
+              (Core.verify coreProgram tempDir .none
+                { Options.default with
+                  stopOnFirstError := false,
+                  verbose := verboseMode,
+                  removeIrrelevantAxioms := true,
+                  solver := "z3" }))
+
+        IO.println "\n==== Verification Results ===="
+        let mut s := ""
+        for vcResult in vcResults do
+          let (locationPrefix, locationSuffix) := match Imperative.getFileRange vcResult.obligation.metadata with
+            | some fr =>
+              if fr.range.isNone then ("", "")
+              else
+                match tsSourceOpt with
+                | some (tsPath, fileMap) =>
+                  match fr.file with
+                  | .file path =>
+                    if path == tsPath then
+                      let pos := fileMap.toPosition fr.range.start
+                      match vcResult.result with
+                      | .fail => (s!"Assertion failed at line {pos.line}, col {pos.column}: ", "")
+                      | _ => ("", s!" (at line {pos.line}, col {pos.column})")
+                    else
+                      match vcResult.result with
+                      | .fail => (s!"Assertion failed at byte {fr.range.start}: ", "")
+                      | _ => ("", s!" (at byte {fr.range.start})")
+                | none =>
+                  match vcResult.result with
+                  | .fail => (s!"Assertion failed at byte {fr.range.start}: ", "")
+                  | _ => ("", s!" (at byte {fr.range.start})")
+            | none => ("", "")
+          s := s ++ s!"{locationPrefix}{vcResult.obligation.label}: {Std.format vcResult.result}{locationSuffix}\n"
+        IO.println s
 
 def commandMap : Std.HashMap String Command :=
   commandList.foldl (init := {}) fun m c => m.insert c.name c

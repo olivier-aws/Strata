@@ -55,7 +55,7 @@ private def mkELoc (e : StmtExpr) (md : Imperative.MetaData Core.Expression) : S
 
 def translateType (t : typeAnnotation SourceRange) : HighTypeMd :=
   match t with
-  | .NumberType _  => mkTy .TFloat64
+  | .NumberType _  => mkTy .TInt  -- Treat JS number as int for verification (no float support in Core yet)
   | .BooleanType _ => mkTy .TBool
   | .StringType _  => mkTy .TString
   | .VoidType _    => mkTy .TVoid
@@ -166,6 +166,8 @@ partial def translateStmt (fp : String) (s : stmt SourceRange)
 
   | .ReturnStmt sr e => do
     let eE ← translateExpr fp e
+    -- In pure function context, just return the expression without wrapping in Return
+    -- The caller (translateFunction) will handle this
     return mkELoc (.Return (some eE)) (srToMd fp sr)
 
   | .AssertStmt sr cond => do
@@ -198,6 +200,24 @@ partial def translateStmt (fp : String) (s : stmt SourceRange)
 end
 
 -- ============================================================
+-- Simplification: strip Return wrappers to make pure expressions
+-- ============================================================
+
+/-- Strip Return wrappers from a StmtExpr to make it usable as a pure expression.
+    `{ return x }` → `x`
+    `{ if c then { return a } else { return b } }` → `if c then a else b`
+-/
+partial def stripReturns (e : StmtExprMd) : StmtExprMd :=
+  match e.val with
+  | .Return (some v) => v
+  | .Block [single] label => stripReturns single
+  | .IfThenElse cond thenB (some elseB) =>
+    { val := .IfThenElse cond (stripReturns thenB) (some (stripReturns elseB)), md := e.md }
+  | .IfThenElse cond thenB none =>
+    { val := .IfThenElse cond (stripReturns thenB) none, md := e.md }
+  | _ => e
+
+-- ============================================================
 -- Function translation
 -- ============================================================
 
@@ -217,6 +237,9 @@ def translateFunction (fp : String) (s : stmt SourceRange)
       | _ => [{ name := "result", type := retTy }]
 
     let bodyE ← translateStmt fp body
+    -- Strip Return wrappers so simple functions become pure expressions
+    -- (required for Laurel-to-Core to treat them as Boogie functions)
+    let bodyE := stripReturns bodyE
 
     return {
       name := name.val
@@ -262,7 +285,7 @@ def jsToLaurel (stmts : Array (stmt SourceRange)) (filePath : String := "")
       body := .Transparent mainBody
       md := defaultMd
     }
-    procedures := mainProc :: procedures
+    procedures := procedures ++ [mainProc]
 
   return {
     staticProcedures := procedures
