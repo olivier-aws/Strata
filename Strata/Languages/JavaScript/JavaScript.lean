@@ -6,3 +6,4 @@
 
 import Strata.Languages.JavaScript.JavaScriptDialect
 import Strata.Languages.JavaScript.ReadJavaScript
+import Strata.Languages.JavaScript.JSToLaurel
