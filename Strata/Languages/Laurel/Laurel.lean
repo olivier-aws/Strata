@@ -123,7 +123,6 @@ inductive HighType : Type where
   /-- Temporary construct meant to aid the migration of Python->Core to Python->Laurel.
   Type "passed through" from Core. Intended to allow translations to Laurel to refer directly to Core. -/
   | TCore (s: String)
-  deriving Repr
 
 mutual
 
