@@ -10,6 +10,7 @@ import Strata.Languages.Core.SarifOutput
 import Strata.Languages.Laurel.Grammar.ConcreteToAbstractTreeTranslator
 import Strata.Languages.Laurel.LaurelToCoreTranslator
 import Strata.Languages.Laurel.LaurelFormat
+import Strata.Languages.Laurel.Analysis
 import Strata.Languages.Python.Python
 import Strata.Languages.Python.Specs
 import Strata.Languages.Python.Specs.ToLaurel
@@ -18,8 +19,10 @@ import Strata.Transform.ProcedureInlining
 import Strata.Languages.Python.CorePrelude
 import Strata.Languages.JavaScript.JavaScript
 
-def exitFailure {α} (message : String) (hint : String := "strata --help") : IO α := do
-  IO.eprintln s!"Exception: {message}\n\nRun {hint} for additional help."
+open Strata.Analysis
+
+def exitFailure {α} (message : String) : IO α := do
+  IO.eprintln ("Exception: " ++ message  ++ "\n\nRun strata --help for additional help.")
   IO.Process.exit 1
 
 def exitCmdFailure {α} (cmdName : String) (message : String) : IO α :=
@@ -300,15 +303,9 @@ def ionPathToPythonPath (ionPath : String) : Option String :=
 
 /-- Try to read Python source file and create a FileMap for line/column conversion -/
 def tryReadPythonSource (ionPath : String) : IO (Option (String × Lean.FileMap)) := do
-  match ionPathToPythonPath ionPath with
-  | none => return none
-  | some pyPath =>
-    try
-      let content ← IO.FS.readFile pyPath
-      let fileMap := Lean.FileMap.ofString content
-      return some (pyPath, fileMap)
-    catch _ =>
-      return none
+  let info ← tryReadSourceFile ionPath
+      (stripSuffix := ".python.st.ion") (extraExtensions := [".py"])
+  return info.map (fun i => (i.path, i.fileMap))
 
 def pyAnalyzeCommand : Command where
   name := "pyAnalyze"
@@ -478,107 +475,18 @@ def pyAnalyzeLaurelCommand : Command where
       IO.print pgm
     assert! cmds.size == 1
 
-    let pySpecResult ← buildPySpecPrelude (pflags.getRepeated "pyspec")
-    let pyPrelude := pySpecResult.corePrelude
+    let prelude := Strata.Python.Core.prelude
+    let sourceInfo := pySourceOpt.map fun (path, fileMap) =>
+      (SourceFileInfo.mk path fileMap)
+    let sourcePathForMetadata := resolveSourcePath sourceInfo filePath
 
-    -- Extract overload dispatch tables from --dispatch files
-    let mut allOverloads := pySpecResult.overloads
-    for dispatchPath in pflags.getRepeated "dispatch" do
-      let ionFile : System.FilePath := dispatchPath
-      let sigs ←
-        match ← Strata.Python.Specs.readDDM ionFile |>.toBaseIO with
-        | .ok t => pure t
-        | .error msg =>
-          exitFailure s!"Could not read dispatch file {ionFile}: {msg}"
-      let (overloads, errors) :=
-        Strata.Python.Specs.ToLaurel.extractOverloads dispatchPath sigs
-      if errors.size > 0 then
-        IO.eprintln s!"{errors.size} dispatch warning(s) for {ionFile}:"
-        for err in errors do
-          IO.eprintln s!"  {err.file}: {err.message}"
-      for (funcName, fnOverloads) in overloads do
-        let existing := allOverloads.getD funcName {}
-        allOverloads := allOverloads.insert funcName
-          (fnOverloads.fold (init := existing) fun acc k v => acc.insert k v)
-
-    let sourcePathForMetadata := match pySourceOpt with
-      | some (pyPath, _) => pyPath
-      | none => filePath
-    let laurelPgm := Strata.Python.pythonToLaurel pyPrelude cmds[0]!
-      sourcePathForMetadata allOverloads
+    let laurelPgm := Strata.Python.pythonToLaurel prelude cmds[0]! sourcePathForMetadata
     match laurelPgm with
       | .error e =>
         exitFailure s!"Python to Laurel translation failed: {e}"
       | .ok laurelProgram =>
-        if verbose then
-          IO.println "\n==== Laurel Program ===="
-          IO.println f!"{laurelProgram}"
-
-        -- Translate Laurel to Core
-        match Strata.Laurel.translate laurelProgram with
-        | .error diagnostics =>
-          exitFailure s!"Laurel to Core translation failed: {diagnostics}"
-        | .ok (coreProgramDecls, modifiesDiags) =>
-          if verbose then
-            IO.println "\n==== Core Program ===="
-            IO.print (coreProgramDecls, modifiesDiags)
-
-          -- Strip the Laurel corePrelude prefix (always emitted by
-          -- Laurel.translate); already present in pyPrelude.
-          let laurelPreludeSize := Strata.Laurel.corePrelude.decls.length
-          let programDecls := coreProgramDecls.decls.drop laurelPreludeSize
-          -- Check for name collisions between program and prelude
-          let preludeNames : Std.HashSet String :=
-            pyPrelude.decls.flatMap Core.Decl.names
-              |>.foldl (init := {}) fun s n => s.insert n.name
-          let collisions := programDecls.flatMap fun d =>
-            d.names.filter fun n => preludeNames.contains n.name
-          if !collisions.isEmpty then
-            let names := ", ".intercalate (collisions.map (·.name))
-            exitFailure s!"Core name collision between program and prelude: {names}"
-          let coreProgram := {decls := pyPrelude.decls ++ programDecls }
-
-          -- Verify using Core verifier
-          let vcResults ← IO.FS.withTempDir (fun tempDir =>
-              EIO.toIO
-                (fun f => IO.Error.userError (toString f))
-                (Core.verify coreProgram tempDir .none
-                  { Options.default with stopOnFirstError := false, verbose := .quiet, solver := "z3" }))
-
-          -- Print results
-          IO.println "\n==== Verification Results ===="
-          let mut s := ""
-          for vcResult in vcResults do
-            let (locationPrefix, locationSuffix) := match Imperative.getFileRange vcResult.obligation.metadata with
-              | some fr =>
-                if fr.range.isNone then ("", "")
-                else
-                  match pySourceOpt with
-                  | some (pyPath, fileMap) =>
-                    match fr.file with
-                    | .file path =>
-                      if path == pyPath then
-                        let pos := fileMap.toPosition fr.range.start
-                        match vcResult.result with
-                        | .fail => (s!"Assertion failed at line {pos.line}, col {pos.column}: ", "")
-                        | _ => ("", s!" (at line {pos.line}, col {pos.column})")
-                      else
-                        match vcResult.result with
-                        | .fail => (s!"Assertion failed at byte {fr.range.start}: ", "")
-                        | _ => ("", s!" (at byte {fr.range.start})")
-                  | none =>
-                    match vcResult.result with
-                    | .fail => (s!"Assertion failed at byte {fr.range.start}: ", "")
-                    | _ => ("", s!" (at byte {fr.range.start})")
-              | none => ("", "")
-            s := s ++ s!"{locationPrefix}{vcResult.obligation.label}: {Std.format vcResult.result}{locationSuffix}\n"
-          IO.println s
-          -- Output in SARIF format if requested
-          if outputSarif then
-            let files := match pySourceOpt with
-              | some (pyPath, fileMap) => Map.empty.insert (Strata.Uri.file pyPath) fileMap
-              | none => Map.empty
-            Core.Sarif.writeSarifOutput files vcResults (filePath ++ ".sarif")
+        analyzeLaurelProgram laurelProgram sourceInfo verbose
+          (preludeDecls := prelude.decls)
 
 def javaGenCommand : Command where
   name := "javaGen"
@@ -638,6 +546,10 @@ def laurelAnalyzeCommand : Command where
     IO.println s!"==== DIAGNOSTICS ===="
     for diag in diagnostics do
       IO.println s!"{Std.format diag.fileRange.file}:{diag.fileRange.range.start}-{diag.fileRange.range.stop}: {diag.message}"
+
+/-- Try to read TypeScript/JavaScript source file for line/column conversion -/
+def tryReadTsSource (ionPath : String) : IO (Option SourceFileInfo) :=
+  tryReadSourceFile ionPath (extraExtensions := [".ts", ".js"])
 
 def pySpecToLaurelCommand : Command where
   name := "pySpecToLaurel"
@@ -709,24 +621,6 @@ def commandGroups : List CommandGroup := [
 def commandList : List Command :=
   commandGroups.foldl (init := []) fun acc g => acc ++ g.commands
 
-/-- Try to read TypeScript source file and create a FileMap for line/column conversion -/
-def tryReadTsSource (ionPath : String) : IO (Option (String × Lean.FileMap)) := do
-  -- Try stripping .st.ion to find the source (e.g. foo.ts.st.ion → foo.ts)
-  let base := if ionPath.endsWith ".st.ion"
-              then (ionPath.dropEnd ".st.ion".length).toString
-              else ionPath
-  let candidates := [
-    base,          -- e.g. foo.ts (from foo.ts.st.ion)
-    base ++ ".ts", -- e.g. foo.ts (from foo.st.ion)
-    base ++ ".js"  -- e.g. foo.js (from foo.st.ion)
-  ]
-  for path in candidates do
-    try
-      let content ← IO.FS.readFile path
-      return some (path, Lean.FileMap.ofString content)
-    catch _ => pure ()
-  return none
-
 def jsToLaurelCommand : Command where
   name := "jsToLaurel"
   args := [ "input", "output" ]
@@ -736,10 +630,8 @@ def jsToLaurelCommand : Command where
     let outputPath : System.FilePath := v[1]
     let stmts ← Strata.JavaScript.readJavaScriptStrata filePath
       |>.toIO (fun e => IO.Error.userError e)
-    let tsSourceOpt ← tryReadTsSource filePath
-    let sourcePathForMetadata := match tsSourceOpt with
-      | some (tsPath, _) => tsPath
-      | none => filePath
+    let sourceInfo ← tryReadTsSource filePath
+    let sourcePathForMetadata := resolveSourcePath sourceInfo filePath
     match Strata.JavaScript.jsToLaurel stmts (filePath := sourcePathForMetadata) with
     | .error msg =>
       exitFailure s!"JavaScript to Laurel translation failed: {msg}"
@@ -757,11 +649,8 @@ def jsAnalyzeLaurelCommand : Command where
     let filePath := v[0]
     let stmts ← Strata.JavaScript.readJavaScriptStrata filePath
       |>.toIO (fun e => IO.Error.userError e)
-    let tsSourceOpt ← tryReadTsSource filePath
-
-    let sourcePathForMetadata := match tsSourceOpt with
-      | some (tsPath, _) => tsPath
-      | none => filePath
+    let sourceInfo ← tryReadTsSource filePath
+    let sourcePathForMetadata := resolveSourcePath sourceInfo filePath
 
     if verbose then
       IO.println s!"==== JavaScript AST: {stmts.size} statements ===="
@@ -770,56 +659,7 @@ def jsAnalyzeLaurelCommand : Command where
     | .error msg =>
       exitFailure s!"JavaScript to Laurel translation failed: {msg}"
     | .ok laurelProgram =>
-      if verbose then
-        IO.println "\n==== Laurel Program ===="
-        IO.println f!"{laurelProgram}"
-
-      match Strata.Laurel.translate laurelProgram with
-      | .error diagnostics =>
-        exitFailure s!"Laurel to Core translation failed: {diagnostics.map (·.message)}"
-      | .ok (coreProgram, _) =>
-        if verbose then
-          IO.println "\n==== Core Program ===="
-          IO.print coreProgram
-
-        let verboseMode := VerboseMode.ofBool verbose
-        let vcResults ← IO.FS.withTempDir (fun tempDir =>
-            EIO.toIO
-              (fun f => IO.Error.userError (toString f))
-              (Core.verify coreProgram tempDir .none
-                { Options.default with
-                  stopOnFirstError := false,
-                  verbose := verboseMode,
-                  removeIrrelevantAxioms := true,
-                  solver := "z3" }))
-
-        IO.println "\n==== Verification Results ===="
-        let mut s := ""
-        for vcResult in vcResults do
-          let (locationPrefix, locationSuffix) := match Imperative.getFileRange vcResult.obligation.metadata with
-            | some fr =>
-              if fr.range.isNone then ("", "")
-              else
-                match tsSourceOpt with
-                | some (tsPath, fileMap) =>
-                  match fr.file with
-                  | .file path =>
-                    if path == tsPath then
-                      let pos := fileMap.toPosition fr.range.start
-                      match vcResult.result with
-                      | .fail => (s!"Assertion failed at line {pos.line}, col {pos.column}: ", "")
-                      | _ => ("", s!" (at line {pos.line}, col {pos.column})")
-                    else
-                      match vcResult.result with
-                      | .fail => (s!"Assertion failed at byte {fr.range.start}: ", "")
-                      | _ => ("", s!" (at byte {fr.range.start})")
-                | none =>
-                  match vcResult.result with
-                  | .fail => (s!"Assertion failed at byte {fr.range.start}: ", "")
-                  | _ => ("", s!" (at byte {fr.range.start})")
-            | none => ("", "")
-          s := s ++ s!"{locationPrefix}{vcResult.obligation.label}: {Std.format vcResult.result}{locationSuffix}\n"
-        IO.println s
+      analyzeLaurelProgram laurelProgram sourceInfo verbose
 
 def commandMap : Std.HashMap String Command :=
   commandList.foldl (init := {}) fun m c => m.insert c.name c
