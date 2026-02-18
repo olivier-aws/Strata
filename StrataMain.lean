@@ -709,6 +709,24 @@ def commandGroups : List CommandGroup := [
 def commandList : List Command :=
   commandGroups.foldl (init := []) fun acc g => acc ++ g.commands
 
+/-- Try to read TypeScript source file and create a FileMap for line/column conversion -/
+def tryReadTsSource (ionPath : String) : IO (Option (String × Lean.FileMap)) := do
+  -- Try stripping .st.ion to find the source (e.g. foo.ts.st.ion → foo.ts)
+  let base := if ionPath.endsWith ".st.ion"
+              then (ionPath.dropEnd ".st.ion".length).toString
+              else ionPath
+  let candidates := [
+    base,          -- e.g. foo.ts (from foo.ts.st.ion)
+    base ++ ".ts", -- e.g. foo.ts (from foo.st.ion)
+    base ++ ".js"  -- e.g. foo.js (from foo.st.ion)
+  ]
+  for path in candidates do
+    try
+      let content ← IO.FS.readFile path
+      return some (path, Lean.FileMap.ofString content)
+    catch _ => pure ()
+  return none
+
 def jsToLaurelCommand : Command where
   name := "jsToLaurel"
   args := [ "input", "output" ]
@@ -718,28 +736,17 @@ def jsToLaurelCommand : Command where
     let outputPath : System.FilePath := v[1]
     let stmts ← Strata.JavaScript.readJavaScriptStrata filePath
       |>.toIO (fun e => IO.Error.userError e)
-    match Strata.JavaScript.jsToLaurel stmts (filePath := filePath) with
+    let tsSourceOpt ← tryReadTsSource filePath
+    let sourcePathForMetadata := match tsSourceOpt with
+      | some (tsPath, _) => tsPath
+      | none => filePath
+    match Strata.JavaScript.jsToLaurel stmts (filePath := sourcePathForMetadata) with
     | .error msg =>
       exitFailure s!"JavaScript to Laurel translation failed: {msg}"
     | .ok laurelProgram =>
       let bytes := Strata.Laurel.ToIon.programToIonBytes laurelProgram
       IO.FS.writeBinFile outputPath bytes
       IO.println s!"Wrote Laurel Ion to {outputPath}"
-
-/-- Try to read TypeScript source file and create a FileMap for line/column conversion -/
-def tryReadTsSource (ionPath : String) : IO (Option (String × Lean.FileMap)) := do
-  -- Try stripping .js.st.ion or .ts.st.ion to find the source
-  let candidates := [
-    ionPath.dropRight ".st.ion".length,  -- e.g. foo.ts
-    ionPath.dropRight ".ts.st.ion".length ++ ".ts",
-    ionPath.dropRight ".js.st.ion".length ++ ".js"
-  ]
-  for path in candidates do
-    try
-      let content ← IO.FS.readFile path
-      return some (path, Lean.FileMap.ofString content)
-    catch _ => pure ()
-  return none
 
 def jsAnalyzeLaurelCommand : Command where
   name := "jsAnalyzeLaurel"
