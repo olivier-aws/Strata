@@ -14,13 +14,43 @@ Strata's Ion-based format, following the Python model.
 npm install
 ```
 
-## Generating the DDM dialect
+## Architecture
+
+The tool has three components:
+
+1. **`src/base.ts`** — Core Strata AST datatypes and Ion serialization (mirrors `../Python/strata/base.py`)
+2. **`src/jsast.ts`** — JavaScript DDM dialect definition and TypeScript AST → Strata translation (mirrors `../Python/strata/pythonast.py`)
+3. **`src/cli.ts`** — CLI entry point (mirrors `../Python/strata/gen.py`)
+
+## Dialect Generation
+
+The JavaScript DDM dialect is defined programmatically in `src/jsast.ts`
+(the `genDialect()` function). It is **not** hand-written — the committed
+`dialects/JavaScript.dialect.st.ion` file is generated output.
+
+To regenerate after modifying `genDialect()`:
+
+```bash
+./scripts/gen_dialect.sh
+```
+
+Or manually:
 
 ```bash
 npx tsx src/cli.ts dialect dialects
 ```
 
-This writes `dialects/JavaScript.dialect.st.ion`.
+After regenerating, you must rebuild the Lean dialect module:
+
+```bash
+# From the Strata repo root:
+rm -f .lake/build/lib/lean/Strata/Languages/JavaScript/JavaScriptDialect.olean
+lake build Strata.Languages.JavaScript.JavaScriptDialect
+```
+
+The Lean file `Strata/Languages/JavaScript/JavaScriptDialect.lean` loads
+the binary Ion dialect via `#load_dialect` and auto-generates typed Lean
+inductive types via `#strata_gen JavaScript`.
 
 ## Parsing TypeScript into Strata
 
@@ -28,33 +58,10 @@ This writes `dialects/JavaScript.dialect.st.ion`.
 npx tsx src/cli.ts js_to_strata input.ts output.ts.st.ion
 ```
 
-Use `.ion` extension for binary Ion, any other extension for text Ion (useful for debugging).
+Use `.txt` extension for text Ion (useful for debugging), any other
+extension for binary Ion.
 
-## Supported TypeScript subset
+## Supported TypeScript Subset
 
-- Function declarations with typed parameters and return types
-- Variable declarations (`let`/`const`) with type annotations and initializers
-- Assignments
-- `if`/`else`, `while`, blocks
-- `return` statements
-- `console.assert()` → translated to `AssertStmt`
-- Arithmetic: `+`, `-`, `*`, `/`, `%`
-- Comparisons: `===`, `!==`, `<`, `<=`, `>`, `>=`
-- Boolean operators: `&&`, `||`, `!`
-- Unary minus
-- Function calls
-- Property access (`obj.field`)
-- Ternary expressions (`c ? a : b`)
-- Parenthesized expressions
-- Type annotations: `number`, `boolean`, `string`, `void`, `bigint`, named types
-
-## Architecture
-
-Following the Python model from `Tools/Python/`:
-
-1. **`src/base.ts`** — Core Strata AST datatypes and Ion serialization (mirrors `strata/base.py`)
-2. **`src/jsast.ts`** — JavaScript dialect definition and TypeScript AST → Strata translation (mirrors `strata/pythonast.py`)
-3. **`src/cli.ts`** — CLI entry point (mirrors `strata/gen.py`)
-
-The tool uses the TypeScript Compiler API for parsing and type checking,
-giving us full type information on every AST node.
+See `StrataTest/Languages/JavaScript/TS_FEATURE_COVERAGE.md` for the
+full feature coverage matrix.
