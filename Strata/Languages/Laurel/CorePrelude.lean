@@ -66,6 +66,10 @@ function increment(heap: Heap) : Heap {
   MkHeap(Heap..data!(heap), Heap..nextReference!(heap) + 1)
 }
 
+// toString coercion functions for template literal substitutions
+function intToStr(x: int) : string;
+function boolToStr(x: bool) : string;
+
 #end
 
 def corePrelude : Core.Program :=

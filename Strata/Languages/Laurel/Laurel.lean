@@ -144,8 +144,15 @@ inductive HighType : Type where
   | Pure (base : WithMetadata HighType)
   /-- An intersection of types. Used for implicit intersection types, e.g. `Scientist & Scandinavian`. -/
   | Intersection (types : List (WithMetadata HighType))
-  /-- Temporary construct meant to aid the migration of Python->Core to Python->Laurel.
-  Type "passed through" from Core. Intended to allow translations to Laurel to refer directly to Core. -/
+  /-- Union types (e.g. `number | null`). Translated to Core datatypes with constructors for each variant. -/
+  | Union (types : List (WithMetadata HighType))
+  /-- Null type. Used as a member of Union types. -/
+  | TNull
+  /-- Array type (e.g. `number[]`). Translated to `Map int T` in Core. -/
+  | TArray (elementType : WithMetadata HighType)
+  /-- Tuple type (e.g. `[number, string]`). Translated to Core datatypes with positional fields. -/
+  | TTuple (elementTypes : List (WithMetadata HighType))
+  /-- Type "passed through" from Core. Intended to allow translations to Laurel to refer directly to Core. -/
   | TCore (s: String)
   deriving Repr
 
@@ -331,12 +338,17 @@ def highEq (a : HighTypeMd) (b : HighTypeMd) : Bool := match _a: a.val, _b: b.va
   | HighType.Pure b1, HighType.Pure b2 => highEq b1 b2
   | HighType.Intersection ts1, HighType.Intersection ts2 =>
       ts1.length == ts2.length && (ts1.attach.zip ts2 |>.all (fun (t1, t2) => highEq t1.1 t2))
+  | HighType.Union ts1, HighType.Union ts2 =>
+      ts1.length == ts2.length && (ts1.attach.zip ts2 |>.all (fun (t1, t2) => highEq t1.1 t2))
+  | HighType.TNull, HighType.TNull => true
+  | HighType.TArray e1, HighType.TArray e2 => highEq e1 e2
+  | HighType.TTuple ts1, HighType.TTuple ts2 =>
+      ts1.length == ts2.length && (ts1.attach.zip ts2 |>.all (fun (t1, t2) => highEq t1.1 t2))
   | _, _ => false
   termination_by (SizeOf.sizeOf a)
   decreasing_by
     all_goals (cases a; cases b; try term_by_mem)
-    . cases a1; term_by_mem
-    . cases t1; term_by_mem
+    all_goals (first | (cases a1; term_by_mem) | (cases t1; term_by_mem) | (cases elementType; term_by_mem))
 
 instance : BEq HighTypeMd where
   beq := highEq

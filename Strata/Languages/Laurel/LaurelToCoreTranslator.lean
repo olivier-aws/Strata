@@ -35,6 +35,81 @@ open Lambda (LMonoTy LTy LExpr)
 /-
 Translate Laurel HighType to Core Type
 -/
+
+/-- Compute a Core type name for a single HighType component (used in union datatype naming). -/
+private def typeComponentName : HighType → String
+  | .TInt => "Int"
+  | .TBool => "Bool"
+  | .TString => "Str"
+  | .TFloat64 => "Float64"
+  | .TNull => "Null"
+  | .TVoid => "Void"
+  | .UserDefined n => n.text
+  | .TCore s => s
+  | _ => "Unknown"
+
+/-- Compute the Core datatype name for a union type, e.g. Union [TInt, TNull] → "IntOrNull". -/
+def unionDatatypeName (types : List HighTypeMd) : String :=
+  let names := types.map (typeComponentName ·.val)
+  "Or".intercalate names
+
+/-- Compute the Core type for a union. -/
+def unionCoreType (types : List HighTypeMd) : LMonoTy :=
+  .tcons (unionDatatypeName types) []
+
+/-- Generate a Core datatype declaration for a union type. -/
+def generateUnionDatatype (types : List HighTypeMd) : Core.Decl :=
+  let dtName := unionDatatypeName types
+  let constrs : List (Lambda.LConstr Unit) := types.map fun ty =>
+    let compName := typeComponentName ty.val
+    let constrName := s!"{dtName}_mk_{compName}"
+    let args : List (Lambda.Identifier Unit × LMonoTy) := match ty.val with
+      | .TNull => []
+      | _ =>
+        let argTy := match ty.val with
+          | .TInt => LMonoTy.int
+          | .TBool => LMonoTy.bool
+          | .TString => LMonoTy.string
+          | .TFloat64 => .tcons "real" []
+          | .UserDefined _ => .tcons "Composite" []
+          | .TCore s => .tcons s []
+          | _ => LMonoTy.int
+        [(⟨s!"{compName}_val", ()⟩, argTy)]
+    { name := ⟨constrName, ()⟩, args := args }
+  match h : constrs with
+  | first :: rest =>
+    let dt : Lambda.LDatatype Unit := {
+      name := dtName
+      typeArgs := []
+      constrs := first :: rest
+      constrs_ne := by simp
+    }
+    .type (.data [dt])
+  | [] =>
+    -- Unreachable for well-formed union types (which have ≥ 2 members),
+    -- but we handle it gracefully with a dummy datatype.
+    let dt : Lambda.LDatatype Unit := {
+      name := dtName
+      typeArgs := []
+      constrs := [{ name := ⟨s!"{dtName}_empty", ()⟩, args := [] }]
+      constrs_ne := by simp
+    }
+    .type (.data [dt])
+
+/-- Collect all union types used in a program's procedures. -/
+private partial def collectUnionTypes (prog : Program) : List (List HighTypeMd) :=
+  let fromType (ty : HighTypeMd) : List (List HighTypeMd) :=
+    match ty.val with
+    | .Union types => [types]
+    | _ => []
+  let fromParam (p : Parameter) := fromType p.type
+  let fromProc (proc : Procedure) :=
+    proc.inputs.flatMap fromParam ++ proc.outputs.flatMap fromParam
+  let allUnions := prog.staticProcedures.flatMap fromProc
+  allUnions.foldl (init := []) fun acc u =>
+    if acc.any (fun existing => unionDatatypeName existing == unionDatatypeName u) then acc
+    else acc ++ [u]
+
 def translateType (model : SemanticModel) (ty : HighTypeMd) : LMonoTy :=
   match _h : ty.val with
   | .TInt => LMonoTy.int
@@ -46,13 +121,14 @@ def translateType (model : SemanticModel) (ty : HighTypeMd) : LMonoTy :=
   | .TSet elementType => Core.mapTy (translateType model elementType) LMonoTy.bool
   | .TMap keyType valueType => Core.mapTy (translateType model keyType) (translateType model valueType)
   | .UserDefined name =>
-    -- Composite types map to "Composite"; datatypes map to their own name
     match name.uniqueId.bind model.refToDef.get? with
     | some (.compositeType _) => .tcons "Composite" []
     | some (.datatypeDefinition dt) => .tcons dt.name.text []
-    | _ => .tcons "Composite" [] -- fallback for unresolved refs
+    | _ => .tcons "Composite" []
   | .TCore s => .tcons s []
-  | .TFloat64 => LMonoTy.real -- Incorrect?
+  | .TFloat64 => LMonoTy.real
+  | .TNull => LMonoTy.bool
+  | .Union types => unionCoreType types
   | _ => panic s!"translateType: unsupported type {ToFormat.format ty}"
 termination_by ty.val
 decreasing_by all_goals (first | (cases elementType; term_by_mem) | (cases keyType; term_by_mem) | (cases valueType; term_by_mem))
@@ -661,8 +737,9 @@ def translate (program : Program): Except (Array DiagnosticModel) (Core.Program 
   let laurelDatatypeDecls := program.types.filterMap fun td => match td with
     | .Datatype dt => some (translateDatatypeDefinition model dt)
     | _ => none
+  let unionDecls := (collectUnionTypes program).map generateUnionDatatype
   let program := {
-    decls := laurelDatatypeDecls ++ constantDecls ++ pureFuncDecls.toList ++ procDecls
+    decls := laurelDatatypeDecls ++ unionDecls ++ constantDecls ++ pureFuncDecls.toList ++ procDecls
   }
 
   -- dbg_trace "=== Generated Strata Core Program ==="

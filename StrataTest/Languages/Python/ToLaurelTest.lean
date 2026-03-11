@@ -58,6 +58,10 @@ private def fmtHighType : HighType → String
   | .Applied _ _ => "Applied"
   | .Pure _ => "Pure"
   | .Intersection _ => "Intersection"
+  | .Union _ => "Union"
+  | .TNull => "TNull"
+  | .TArray _ => "TArray"
+  | .TTuple _ => "TTuple"
   | .TCore s => s!"TCore({s})"
 
 private def fmtParam (p : Parameter) : String :=
